@@ -87,7 +87,6 @@ export async function POST(req: NextRequest) {
     getRelevantBookChunks(message, 10),
   ]);
 
-  console.log("memoryContext ------>", memoryContext);
   const systemPrompt = buildSystemPrompt(memoryContext, bookContext || undefined);
 
   const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [

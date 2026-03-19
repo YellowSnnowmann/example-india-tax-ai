@@ -3,7 +3,7 @@ import { z } from "zod";
 import mongoose from "mongoose";
 import { requireAuth } from "@/lib/server/auth";
 import { fetchEcourtsCaseByCnrWithCaptcha } from "@/lib/server/services/ecourts";
-import { getCaseByCnrFromChroma } from "@/lib/server/services/caseAbsorption";
+import { getCaseByCnrFromMemory } from "@/lib/server/services/caseAbsorption";
 import { Case } from "@/lib/server/models";
 
 const schema = z.object({
@@ -55,13 +55,13 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const chromaText = await getCaseByCnrFromChroma(cnrNormalized);
-    if (chromaText) {
+    const memoryText = await getCaseByCnrFromMemory(cnrNormalized);
+    if (memoryText) {
       return NextResponse.json({
         userId: user.id,
         cnr: cnrNormalized,
         fetchedAt: "from ingested cases",
-        text: chromaText,
+        text: memoryText,
         fields: {},
       });
     }

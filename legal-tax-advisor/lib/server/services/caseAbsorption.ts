@@ -1,16 +1,13 @@
 import path from "path";
 import fs from "fs/promises";
-import { getBooksCollection, getBooksCollectionForRead, isChromaEnabled } from "../chroma";
 import { logger } from "../logger";
 import debug from "debug";
+import { getAlphahumanMemoryClient } from "./alphahumanMemory";
 
 const log = debug("app:cases:absorb");
+const CASES_NAMESPACE = "cases";
 const CHUNK_SIZE = 2000;
 const CHUNK_OVERLAP = 200;
-const CHROMA_BATCH = 100;
-
-const CHROMA_REQUIRED_MSG =
-  "Chroma is required for case absorption. Set CHROMA_URL and run: npm run chroma";
 
 interface StructuredCase {
   cnr?: string;
@@ -157,12 +154,10 @@ function buildCaseText(structured: StructuredCase, summary: SummaryCase): string
 }
 
 /**
- * Absorb a single case folder (CNR-named) into Chroma.
+ * Absorb a single case folder (CNR-named) into Alphahuman Memory.
  * Expects structured.json and summary.json in the folder.
  */
 export async function absorbCase(caseDir: string): Promise<CaseAbsorbResult> {
-  if (!isChromaEnabled()) throw new Error(CHROMA_REQUIRED_MSG);
-
   const cnr = path.basename(caseDir);
   const structuredPath = path.join(caseDir, "structured.json");
   const summaryPath = path.join(caseDir, "summary.json");
@@ -187,21 +182,20 @@ export async function absorbCase(caseDir: string): Promise<CaseAbsorbResult> {
   const chunks = chunkText(text);
   log("absorbCase", { cnr, chunks: chunks.length, textLen: text.length });
 
-  const collection = await getBooksCollection();
-  await collection.delete({ where: { caseId: cnr } });
-
-  const ids = chunks.map((_, i) => `case_${cnr}_${i}`);
-  const metadatas = chunks.map(() => ({
-    source: "case",
-    caseId: cnr,
-    cnr,
-  }));
-
-  for (let i = 0; i < chunks.length; i += CHROMA_BATCH) {
-    await collection.add({
-      ids: ids.slice(i, i + CHROMA_BATCH),
-      documents: chunks.slice(i, i + CHROMA_BATCH),
-      metadatas: metadatas.slice(i, i + CHROMA_BATCH),
+  const client = getAlphahumanMemoryClient();
+  for (let i = 0; i < chunks.length; i++) {
+    await client.insertMemory({
+      title: `Case ${cnr} (chunk ${i + 1}/${chunks.length})`,
+      content: chunks[i]!,
+      namespace: CASES_NAMESPACE,
+      sourceType: "doc",
+      documentId: `case_${cnr}_${i}`,
+      metadata: {
+        source: "case",
+        cnr,
+        chunkIndex: i,
+        totalChunks: chunks.length,
+      },
     });
   }
 
@@ -210,21 +204,30 @@ export async function absorbCase(caseDir: string): Promise<CaseAbsorbResult> {
 }
 
 /**
- * Get case content by CNR from Chroma (ingested scraped cases).
- * Returns combined text of all chunks for that CNR, or null if not found.
+ * Get case content by CNR from Alphahuman Memory (ingested scraped cases).
+ * Returns combined context for that CNR via RAG query, or null if not found.
  */
-export async function getCaseByCnrFromChroma(cnr: string): Promise<string | null> {
-  if (!isChromaEnabled()) return null;
+export async function getCaseByCnrFromMemory(cnr: string): Promise<string | null> {
   try {
-    const collection = await getBooksCollectionForRead();
-    const result = await collection.get({
-      where: { caseId: { $eq: cnr } },
-      include: ["documents"],
+    const client = getAlphahumanMemoryClient();
+    const res = await client.queryMemory({
+      query: cnr,
+      namespace: CASES_NAMESPACE,
+      maxChunks: 150,
     });
-    const docs = result.documents ?? [];
-    if (!docs.length) return null;
-    const combined = docs.filter(Boolean).join("\n\n---\n\n");
-    return combined.trim() || null;
+    const contextStr =
+      res.data.llmContextMessage ??
+      (res.data.context?.chunks ?? [])
+        .map((c: Record<string, unknown>) =>
+          typeof (c as { content?: string }).content === "string"
+            ? (c as { content: string }).content
+            : typeof (c as { text?: string }).text === "string"
+              ? (c as { text: string }).text
+              : ""
+        )
+        .filter(Boolean)
+        .join("\n\n---\n\n");
+    return contextStr.trim() || null;
   } catch {
     return null;
   }

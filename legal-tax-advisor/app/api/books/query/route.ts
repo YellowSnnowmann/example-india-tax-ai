@@ -1,15 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getBooksCollectionForRead, isChromaEnabled } from "@/lib/server/chroma";
+import { getAlphahumanMemoryClient, isAlphahumanMemoryEnabled } from "@/lib/server/memory";
 
 /**
  * GET /api/books/query?q=<query>&limit=<n>
- * Query ChromaDB directly with vector search (same as chat uses).
- * Returns matching chunks with documents, metadatas, and distances.
+ * Query Alphahuman Memory (books namespace) via SDK — same RAG as chat uses.
  */
 export async function GET(req: NextRequest) {
-  if (!isChromaEnabled()) {
+  if (!isAlphahumanMemoryEnabled()) {
     return NextResponse.json(
-      { error: "Chroma is not configured. Set CHROMA_URL." },
+      { error: "Memory is not configured. Set ALPHAHUMAN_TOKEN." },
       { status: 503 }
     );
   }
@@ -23,26 +22,27 @@ export async function GET(req: NextRequest) {
   }
 
   const limitParam = req.nextUrl.searchParams.get("limit");
-  const limit = Math.min(Math.max(1, parseInt(limitParam ?? "10", 10) || 10), 50);
+  const limit = Math.min(Math.max(1, parseInt(limitParam ?? "10", 10) || 10), 200);
 
   try {
-    const collection = await getBooksCollectionForRead();
-    const result = await collection.query({
-      queryTexts: [q],
-      nResults: limit,
-      include: ["documents", "metadatas", "distances"],
+    const client = getAlphahumanMemoryClient();
+    const res = await client.queryMemory({
+      query: q,
+      namespace: "books",
+      maxChunks: limit,
     });
 
-    const ids = (result.ids ?? [])[0] ?? [];
-    const documents = (result.documents ?? [])[0] ?? [];
-    const metadatas = (result.metadatas ?? [])[0] ?? [];
-    const distances = (result.distances ?? [])[0] ?? [];
-
-    const results = ids.map((id, i) => ({
-      id,
-      document: documents[i] ?? null,
-      metadata: metadatas[i] ?? null,
-      distance: distances[i] ?? null,
+    const chunks = (res.data.context?.chunks ?? []) as Array<Record<string, unknown>>;
+    const results = chunks.map((c, i) => ({
+      id: `chunk_${i}`,
+      document:
+        typeof (c as { content?: string }).content === "string"
+          ? (c as { content: string }).content
+          : typeof (c as { text?: string }).text === "string"
+            ? (c as { text: string }).text
+            : null,
+      metadata: c,
+      distance: null,
     }));
 
     return NextResponse.json({
@@ -50,6 +50,7 @@ export async function GET(req: NextRequest) {
       limit,
       count: results.length,
       results,
+      cached: res.data.cached,
     });
   } catch (err) {
     return NextResponse.json(

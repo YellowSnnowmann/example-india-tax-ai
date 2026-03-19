@@ -4,13 +4,12 @@ const nextConfig = {
   env: {
     NEXT_PUBLIC_BACKEND_URL: process.env.NEXT_PUBLIC_BACKEND_URL,
   },
-  // pdf-parse, pdfjs-dist, chromadb, and LangChain don't work when bundled by webpack; run them in Node (Next 14).
+  // pdf-parse, pdfjs-dist, external vector store, and LangChain don't work when bundled by webpack; run them in Node (Next 14).
   experimental: {
     serverComponentsExternalPackages: [
       "pdf-parse",
       "pdfjs-dist",
-      "chromadb",
-      "@chroma-core/default-embed",
+      "external vector store",
       "langchain",
       "@langchain/core",
       "@langchain/openai",

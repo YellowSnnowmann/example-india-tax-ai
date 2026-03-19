@@ -3,8 +3,9 @@ import fs from "fs/promises";
 import { connectDb } from "../db/mongo";
 import { Book } from "../models";
 import { logger } from "../logger";
-import { getBooksCollection, getBooksCollectionForRead, isChromaEnabled } from "../chroma";
+import { getAlphahumanMemoryClient } from "./alphahumanMemory";
 
+const BOOKS_NAMESPACE = "books";
 const BOOKS_DIR = path.join(process.cwd(), "books");
 const CHUNK_SIZE = 2000;
 const CHUNK_OVERLAP = 200;
@@ -64,16 +65,10 @@ function chunkText(text: string, options: { chunkSize?: number; overlap?: number
   return chunks.filter(Boolean);
 }
 
-const CHROMA_REQUIRED_MSG =
-  "Chroma is required for book absorption. Set CHROMA_URL (e.g. http://localhost:8000) and run the Chroma server: npm run chroma";
-
 /**
- * Ingest a single PDF from the books/ folder: extract text, chunk, store in Chroma only.
+ * Ingest a single PDF from the books/ folder: extract text, chunk, store via Alphahuman Memory SDK.
  */
 export async function absorbBook(filename: string): Promise<AbsorbResult> {
-  if (!isChromaEnabled()) {
-    throw new Error(CHROMA_REQUIRED_MSG);
-  }
   await connectDb();
 
   const filePath = path.join(BOOKS_DIR, filename);
@@ -85,8 +80,6 @@ export async function absorbBook(filename: string): Promise<AbsorbResult> {
     throw new Error("Only PDF files are supported");
   }
 
-  // Always run Chroma ingestion: we no longer skip based on MongoDB "completed"
-  // (that status may be from an old run; Chroma is the only store for book content)
   const book = await Book.findOneAndUpdate(
     { filename },
     {
@@ -110,33 +103,24 @@ export async function absorbBook(filename: string): Promise<AbsorbResult> {
     const bookIdStr = bookId.toString();
     const title = book.title ?? filename.replace(/\.pdf$/i, "").replace(/-/g, " ");
 
-    const collection = await getBooksCollection();
-    await collection.delete({ where: { bookId: bookIdStr } });
-    const ids = chunks.map((_, i) => `${bookIdStr}_${i}`);
-    const metadatas = chunks.map((_, i) => ({
-      bookId: bookIdStr,
-      chunkIndex: i,
-      filename,
-      title,
-    }));
-    const CHROMA_BATCH = 100;
-    for (let i = 0; i < chunks.length; i += CHROMA_BATCH) {
-      await collection.add({
-        ids: ids.slice(i, i + CHROMA_BATCH),
-        documents: chunks.slice(i, i + CHROMA_BATCH),
-        metadatas: metadatas.slice(i, i + CHROMA_BATCH),
+    const client = getAlphahumanMemoryClient();
+    for (let i = 0; i < chunks.length; i++) {
+      await client.insertMemory({
+        title: `${title} (chunk ${i + 1}/${chunks.length})`,
+        content: chunks[i]!,
+        namespace: BOOKS_NAMESPACE,
+        sourceType: "doc",
+        documentId: `${bookIdStr}_${i}`,
+        metadata: {
+          source: "book",
+          bookId: bookIdStr,
+          filename,
+          title,
+          chunkIndex: i,
+          totalChunks: chunks.length,
+          totalPages,
+        },
       });
-    }
-    const count = await collection.count();
-    logger.info("Chroma add complete", {
-      filename,
-      chromaCount: count,
-      expectedChunks: chunks.length,
-    });
-    if (count === 0) {
-      throw new Error(
-        `Chroma reported 0 documents after add (expected ${chunks.length}). The server may have an existing collection created without an embedding function. Try: stop Chroma, delete the ./chroma-data folder, run "npm run chroma" again, then re-run absorption.`
-      );
     }
 
     await Book.updateOne(
@@ -176,45 +160,34 @@ export async function listBooksOnDisk(): Promise<string[]> {
   return dir.filter((f) => f.toLowerCase().endsWith(".pdf"));
 }
 
+/** Extract chunk text from SDK query/recall context for display. */
+function formatChunksFromContext(context: { chunks?: Array<Record<string, unknown>> } | undefined): string {
+  if (!context?.chunks?.length) return "";
+  const parts = context.chunks.map((c) => {
+    const content = (c as { content?: string }).content ?? (c as { text?: string }).text;
+    return typeof content === "string" ? content : "";
+  });
+  return parts.filter(Boolean).join("\n\n---\n\n");
+}
+
 /**
- * Retrieve relevant book chunks via Chroma vector search (semantic similarity to the user query).
- * Used to inject CA book context into the chat system prompt. Returns empty string if Chroma is disabled.
+ * Retrieve relevant book chunks via Alphahuman Memory SDK (RAG query).
+ * Used to inject CA book context into the chat system prompt.
  */
-const CHROMA_QUERY_TIMEOUT_MS = 15_000;
-
 export async function getRelevantBookChunks(query: string, limit: number = 10): Promise<string> {
-  if (!isChromaEnabled()) return "";
-
   try {
-    const collection = await getBooksCollectionForRead();
-    const result = await Promise.race([
-      collection.query({
-        queryTexts: [query],
-        nResults: limit,
-        include: ["documents", "metadatas"],
-      }),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("Chroma query timed out")), CHROMA_QUERY_TIMEOUT_MS)
-      ),
-    ]);
-    const docs = (result.documents ?? [])[0];
-    const metadatas = (result.metadatas ?? [])[0];
-    if (!docs || docs.length === 0) return "";
-
-    const withSource = docs.map((doc, i) => {
-      const meta = metadatas?.[i] as
-        | { filename?: string; caseId?: string; cnr?: string }
-        | undefined;
-      let source = "";
-      if (meta && typeof meta === "object") {
-        if ("caseId" in meta && meta.caseId) source = `[Source: case ${meta.caseId}]`;
-        else if ("filename" in meta && meta.filename) source = `[Source: ${meta.filename}]`;
-      }
-      return source ? `${doc}\n${source}` : doc;
+    const client = getAlphahumanMemoryClient();
+    const res = await client.queryMemory({
+      query,
+      namespace: BOOKS_NAMESPACE,
+      maxChunks: Math.min(limit, 200),
     });
-    return withSource.filter(Boolean).join("\n\n---\n\n");
+    const contextStr =
+      res.data.llmContextMessage ?? formatChunksFromContext(res.data.context);
+    if (!contextStr.trim()) return "";
+    return contextStr;
   } catch (err) {
-    logger.error("Chroma retrieval failed", {
+    logger.error("Memory book retrieval failed", {
       error: err instanceof Error ? err.message : String(err),
     });
     return "";
@@ -222,37 +195,22 @@ export async function getRelevantBookChunks(query: string, limit: number = 10): 
 }
 
 /**
- * Retrieve relevant case chunks from Chroma (ingested scraped cases only).
- * Filters by source: "case" so only case content is returned, not books.
+ * Retrieve relevant case chunks via Alphahuman Memory SDK (RAG query).
  */
 export async function getRelevantCaseChunks(query: string, limit: number = 10): Promise<string> {
-  if (!isChromaEnabled()) return "";
-
   try {
-    const collection = await getBooksCollectionForRead();
-    const result = await Promise.race([
-      collection.query({
-        queryTexts: [query],
-        nResults: limit,
-        where: { source: { $eq: "case" } },
-        include: ["documents", "metadatas"],
-      }),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("Chroma query timed out")), CHROMA_QUERY_TIMEOUT_MS)
-      ),
-    ]);
-    const docs = (result.documents ?? [])[0];
-    const metadatas = (result.metadatas ?? [])[0];
-    if (!docs || docs.length === 0) return "";
-
-    const withSource = docs.map((doc, i) => {
-      const meta = metadatas?.[i] as { caseId?: string; cnr?: string } | undefined;
-      const source = meta?.caseId ? `[Source: case ${meta.caseId}]` : "";
-      return source ? `${doc}\n${source}` : doc;
+    const client = getAlphahumanMemoryClient();
+    const res = await client.queryMemory({
+      query,
+      namespace: "cases",
+      maxChunks: Math.min(limit, 200),
     });
-    return withSource.filter(Boolean).join("\n\n---\n\n");
+    const contextStr =
+      res.data.llmContextMessage ?? formatChunksFromContext(res.data.context);
+    if (!contextStr.trim()) return "";
+    return contextStr;
   } catch (err) {
-    logger.error("Chroma case retrieval failed", {
+    logger.error("Memory case retrieval failed", {
       error: err instanceof Error ? err.message : String(err),
     });
     return "";

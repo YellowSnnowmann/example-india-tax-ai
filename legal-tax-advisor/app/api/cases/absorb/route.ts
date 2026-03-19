@@ -16,7 +16,7 @@ function isAbsorbAuthorized(req: NextRequest): boolean {
 
 /**
  * GET /api/cases/absorb — List case folders available for ingestion.
- * POST /api/cases/absorb — Ingest all cases from scraped-cases into Chroma.
+ * POST /api/cases/absorb — Ingest all cases from scraped-cases into Alphahuman Memory.
  *
  * Auth: JWT Bearer token, or X-Cases-Absorb-Secret header when CASES_ABSORB_SECRET is set.
  * Body: { sourcePath?: string } — Override path. Default: SCRAPED_CASES_PATH env.

@@ -1,8 +1,8 @@
 /**
- * Ingest scraped cases into Chroma.
+ * Ingest scraped cases into Alphahuman Memory (SDK).
  * Usage: npx tsx scripts/ingest-cases.ts [path-to-scraped-cases]
  *
- * Requires: CHROMA_URL, SCRAPED_CASES_PATH (or pass path as arg)
+ * Requires: ALPHAHUMAN_TOKEN, SCRAPED_CASES_PATH (or pass path as arg)
  * Loads .env.local from project root.
  */
 import { config } from "dotenv";

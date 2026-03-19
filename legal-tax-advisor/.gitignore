@@ -6,6 +6,6 @@ dist/
 .env*.local
 *.log
 .DS_Store
-chroma-data/
+memory-data/
 .cursor/
 .vscode/

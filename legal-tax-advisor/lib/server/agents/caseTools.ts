@@ -3,7 +3,7 @@ import { z } from "zod";
 import { tool } from "@langchain/core/tools";
 import { getEcourtsCaptchaImage, fetchEcourtsCaseByCnrWithCaptcha } from "../services/ecourts";
 import { getRelevantBookChunks, getRelevantCaseChunks } from "../services/bookAbsorption";
-import { getCaseByCnrFromChroma } from "../services/caseAbsorption";
+import { getCaseByCnrFromMemory } from "../services/caseAbsorption";
 import { Case } from "../models";
 import { Redis } from "ioredis";
 import { getConfig } from "../config";
@@ -66,14 +66,16 @@ export function getCaptchaTool() {
         });
       }
 
-      const chromaText = await getCaseByCnrFromChroma(normalized);
-      if (chromaText) {
-        log("get_captcha: case found in Chroma (ingested), returning", { cnr: normalized });
+      const memoryText = await getCaseByCnrFromMemory(normalized);
+      if (memoryText) {
+        log("get_captcha: case found in memory ingestion (ingested), returning", {
+          cnr: normalized,
+        });
         return JSON.stringify({
           success: true,
           cnr: normalized,
           caseDetails: {
-            text: chromaText.slice(0, 3000),
+            text: memoryText.slice(0, 3000),
             fields: {},
             fetchedAt: "from ingested cases",
           },
@@ -151,16 +153,16 @@ export function fetchCaseWithCaptchaTool() {
         });
       }
 
-      const chromaText = await getCaseByCnrFromChroma(pending.cnr);
-      if (chromaText) {
-        log("fetch_case_with_captcha: case found in Chroma (ingested), returning", {
+      const memoryText = await getCaseByCnrFromMemory(pending.cnr);
+      if (memoryText) {
+        log("fetch_case_with_captcha: case found in memory ingestion (ingested), returning", {
           cnr: pending.cnr,
         });
         return JSON.stringify({
           success: true,
           cnr: pending.cnr,
           caseDetails: {
-            text: chromaText.slice(0, 3000),
+            text: memoryText.slice(0, 3000),
             fields: {},
             fetchedAt: "from ingested cases",
           },

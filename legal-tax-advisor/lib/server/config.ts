@@ -8,10 +8,12 @@ const configSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   GOOGLE_CLIENT_ID: z.string(),
   GOOGLE_CLIENT_SECRET: z.string(),
+  /** Alphahuman Memory API token — required for book/case ingestion and RAG . */
+  ALPHAHUMAN_TOKEN: z.string().default(""),
+  /** Optional base URL override for Alphahuman backend. */
+  ALPHAHUMAN_BASE_URL: z.string().default(""),
   /** Base URL of the app (e.g. http://localhost:3000). Used for OAuth callback. */
   APP_URL: z.string().default("http://localhost:3000"),
-  /** ChromaDB server URL for vector store (e.g. http://localhost:8000). Required for book absorption. */
-  CHROMA_URL: z.string().default(""),
   /** Path to scraped cases directory (CNR-named folders with structured.json, summary.json). */
   SCRAPED_CASES_PATH: z.string().default(""),
   /** Optional secret for /api/cases/absorb — when set, X-Cases-Absorb-Secret header bypasses auth. */

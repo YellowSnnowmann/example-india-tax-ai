@@ -7,6 +7,7 @@ import { connectDb } from "@/lib/server/db/mongo";
 import { Conversation, Message, Case } from "@/lib/server/models";
 import { runCaseAgent } from "@/lib/server/agents/caseAgent";
 import { buildMemoryContext } from "@/lib/server/services/memory.service";
+import { getRelevantBookChunks, getRelevantCaseChunks } from "@/lib/server/services/bookAbsorption";
 import { requireAuth } from "@/lib/server/auth";
 import { getConfig } from "@/lib/server/config";
 
@@ -106,12 +107,14 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const [memoryContext, casesList] = await Promise.all([
+  const [memoryContext, casesList, bookContext, casesMemoryContext] = await Promise.all([
     buildMemoryContext(user.id, message, recentText),
     Case.find({ userId: new mongoose.Types.ObjectId(user.id) })
       .sort({ createdAt: -1 })
       .limit(10)
       .lean(),
+    getRelevantBookChunks(message, 10),
+    getRelevantCaseChunks(message, 10),
   ]);
 
   const casesContext =
@@ -124,13 +127,23 @@ export async function POST(req: NextRequest) {
           .join("\n")
       : "";
 
+  const combinedBookCasesContext =
+    [bookContext, casesMemoryContext].filter(Boolean).length > 0
+      ? "**Relevant context from CA books / case database:**\n" +
+        [bookContext, casesMemoryContext].filter(Boolean).join("\n\n---\n\n")
+      : "";
+  if (combinedBookCasesContext) {
+    console.log("[Cases Chat] Memory (books + cases) context length:", combinedBookCasesContext.length);
+  }
+
   log("Context passed to agent", {
     hasMemoryContext: !!memoryContext,
     memoryContextLen: memoryContext?.length ?? 0,
     hasCasesContext: !!casesContext,
     casesCount: casesList.length,
     hasPendingCaptcha: !!pendingCaptcha,
-    bookContextPreInjected: false,
+    bookContextLen: bookContext?.length ?? 0,
+    casesMemoryContextLen: casesMemoryContext?.length ?? 0,
   });
 
   const messagesForAgent = historyList.map((m) => ({
@@ -154,7 +167,7 @@ export async function POST(req: NextRequest) {
           userId: user.id,
           conversationId,
           memoryContext: memoryContext || undefined,
-          casesContext: casesContext || undefined,
+          casesContext: [casesContext, combinedBookCasesContext].filter(Boolean).join("\n\n"),
           pendingCaptcha,
         },
         messagesForAgent

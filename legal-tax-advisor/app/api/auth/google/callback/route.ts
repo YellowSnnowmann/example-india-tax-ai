@@ -8,7 +8,10 @@ import { getOAuthState, deleteOAuthState } from "@/lib/server/services/oauth";
 import { exchangeGoogleCode, fetchGoogleUser } from "@/lib/server/services/oauth/google";
 import { logger } from "@/lib/server/logger";
 
-function getFrontendUrl(): string {
+function getRequestOrigin(req: NextRequest): string {
+  const host = req.headers.get("x-forwarded-host") || req.headers.get("host");
+  const proto = req.headers.get("x-forwarded-proto") || "http";
+  if (host) return `${proto}://${host}`.replace(/\/+$/, "");
   return getConfig().APP_URL.replace(/\/+$/, "");
 }
 
@@ -54,7 +57,8 @@ async function findOrCreateUser(
 
 export async function GET(req: NextRequest) {
   const { code, state, error } = Object.fromEntries(req.nextUrl.searchParams);
-  const redirectUri = `${getFrontendUrl()}/oauth-callback`;
+  const origin = getRequestOrigin(req);
+  const redirectUri = `${origin}/oauth-callback`;
   logger.info("Google OAuth callback", { hasCode: !!code, hasState: !!state, error });
 
   if (error) {
@@ -78,7 +82,7 @@ export async function GET(req: NextRequest) {
 
   try {
     await connectDb();
-    const callbackUrl = `${getConfig().APP_URL.replace(/\/+$/, "")}/api/auth/google/callback`;
+    const callbackUrl = `${origin}/api/auth/google/callback`;
     const { access_token } = await exchangeGoogleCode(code, callbackUrl);
     const profile = await fetchGoogleUser(access_token);
 

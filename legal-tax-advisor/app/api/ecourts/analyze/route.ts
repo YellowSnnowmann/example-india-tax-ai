@@ -24,7 +24,7 @@ const schema = z.object({
  *
  * Flow:
  * - Fetch case details from eCourts
- * - Retrieve relevant context from Chroma (existing ingested PDFs)
+ * - Retrieve relevant context from Memory (existing ingested PDFs)
  * - Ask the LLM to summarize case status + answer the advocate’s question
  */
 export async function POST(req: NextRequest) {
